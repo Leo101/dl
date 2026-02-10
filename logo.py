@@ -19,4 +19,4 @@ def png_to_ico(png_path, ico_path, icon_sizes=None):
 if __name__ == "__main__":
     png_file = "logo.png"  # 輸入的PNG檔案路徑
     ico_file = "icon.ico"  # 輸出的ICO檔案路徑
-    png_to_ico(png_file, ico_file)‵
+    png_to_ico(png_file, ico_file)
