@@ -27,8 +27,11 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-def run_download(url, output_path, download_type, q):
+def run_download(url, output_path, download_type, q, proc_ref, stop_event):
     try:
+        if stop_event.is_set():
+            q.put(('done_stop',))
+            return
         os.makedirs(output_path, exist_ok=True)
 
         yt_dlp_path = resource_path("yt-dlp.exe")
@@ -70,6 +73,12 @@ def run_download(url, output_path, download_type, q):
             text=True,
             cwd=output_path
         )
+        proc_ref[0] = proc
+        if stop_event.is_set():
+            proc.terminate()
+            proc.wait()
+            q.put(('done_stop',))
+            return
 
         for raw in proc.stdout:
             line = raw.strip()
@@ -146,6 +155,10 @@ def run_download(url, output_path, download_type, q):
 
         proc.wait()
 
+        if stop_event.is_set():
+            q.put(('done_stop',))
+            return
+
         if error_segments:
             succeeded  = total_videos - len(error_segments)
             error_text = '\n\n'.join(f'[影片 {idx}]\n{err}' for idx, err in error_segments)
@@ -171,6 +184,8 @@ class DownloadItem:
         self._current_phase = None
         self._current_pct   = 0.0
         self._destroyed     = False
+        self._proc_ref      = [None]
+        self._stop_event    = threading.Event()
 
         self._build_ui(parent)
         self._start()
@@ -207,6 +222,10 @@ class DownloadItem:
         self._status_label = tk.Label(prog, text='準備中', font=('Arial', 8), width=22)
         self._status_label.pack(pady=(2, 0))
 
+        self._stop_btn = tk.Button(prog, text='中止', font=('Arial', 8),
+                                   fg='#c0392b', command=self._stop_download)
+        self._stop_btn.pack(pady=(4, 0))
+
         self._error_btn = tk.Button(prog, text='查看錯誤', font=('Arial', 8),
                                     fg='red', command=self._show_error)
 
@@ -219,7 +238,8 @@ class DownloadItem:
     def _start(self):
         threading.Thread(
             target=run_download,
-            args=(self._url, self._output_path, self._download_type, self._q),
+            args=(self._url, self._output_path, self._download_type,
+                  self._q, self._proc_ref, self._stop_event),
             daemon=True
         ).start()
         self.frame.after(100, self._poll)
@@ -263,6 +283,7 @@ class DownloadItem:
                     self._update_status()
 
                 elif kind == 'done':
+                    self._stop_btn.pack_forget()
                     self._bar.stop()
                     if msg[1]:
                         self._bar.config(mode='determinate')
@@ -279,12 +300,21 @@ class DownloadItem:
                 elif kind == 'done_partial':
                     _, succeeded, total, error_text = msg
                     self._error_text = error_text
+                    self._stop_btn.pack_forget()
                     self._bar.stop()
                     self._bar.config(mode='determinate')
                     self._bar['value'] = 100
                     self._status_label.config(
                         text=f'部分失敗 ({succeeded}/{total} 成功)', fg='#e65100')
                     self._error_btn.pack(pady=(4, 0))
+                    return
+
+                elif kind == 'done_stop':
+                    self._stop_btn.pack_forget()
+                    self._bar.stop()
+                    self._bar.config(mode='determinate')
+                    self._bar['value'] = 0
+                    self._status_label.config(text='已中止', fg='#888888')
                     return
 
         except queue.Empty:
@@ -321,6 +351,13 @@ class DownloadItem:
         text.config(state=tk.DISABLED)
 
         tk.Button(win, text='關閉', command=win.destroy).pack(pady=(0, 8))
+
+    def _stop_download(self):
+        self._stop_event.set()
+        proc = self._proc_ref[0]
+        if proc is not None:
+            proc.terminate()
+        self._stop_btn.config(state=tk.DISABLED, text='中止中...')
 
     def _delete(self):
         self._destroyed = True
