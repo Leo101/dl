@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
 
@@ -9,7 +10,9 @@ a = Analysis(
     datas=[
         ('yt-dlp.exe', '.'),
         ('ffmpeg.exe', '.'),
-        ('ffprobe.exe', '.')
+        ('ffprobe.exe', '.'),
+        ('icon.ico', '.'),
+        *collect_data_files('sv_ttk'),
     ],
     hiddenimports=[],
     hookspath=[],
@@ -43,5 +46,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-	icon='icon.ico'
+    icon='icon.ico'
 )

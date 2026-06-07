@@ -7,6 +7,18 @@ import queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import tkinter.ttk as ttk
+import sv_ttk
+
+CARD_BG = '#ffffff'
+BORDER  = '#e0e0e0'
+FONT    = 'Segoe UI'
+
+BADGE_CFG = {
+    'video_best': ('#dce8fb', '#1a5fc8'),
+    'video_h264': ('#dce8fb', '#1a5fc8'),
+    'mp3':        ('#dff0e0', '#1e7a34'),
+    'm4a':        ('#dff0e0', '#1e7a34'),
+}
 
 PCT_PATTERN      = re.compile(r'\[download\]\s+([\d.]+)%')
 PLAYLIST_PATTERN = re.compile(r'\[download\] Downloading (?:video|item) (\d+) of (\d+)')
@@ -63,7 +75,7 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
         total_videos   = 0
         title_sent     = False
         stderr_lines   = []
-        error_segments = []  # list of (video_index, error_line)
+        error_segments = []
 
         proc = subprocess.Popen(
             command,
@@ -86,7 +98,6 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
                 continue
             stderr_lines.append(line)
 
-            # Playlist 進度行：Downloading video X of Y
             pm = PLAYLIST_PATTERN.match(line)
             if pm:
                 is_playlist   = True
@@ -98,23 +109,19 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
                 q.put(('playlist', current_video, total_videos))
                 continue
 
-            # 錯誤行
             if line.startswith('ERROR:'):
                 if is_playlist:
                     error_segments.append((current_video, line))
                 continue
 
-            # Destination 行：判斷階段 + 解析標題
             if '[download] Destination:' in line:
                 dest_count += 1
                 filename = line.split('[download] Destination:', 1)[1].strip()
 
-                # 從檔名解析標題（格式：YYYYMMDD - [uploader][id] title.ext）
                 if not title_sent or is_playlist:
                     parts = filename.rsplit('] ', 1)
                     if len(parts) == 2:
                         raw_title = parts[1]
-                        # 移除 .f137.mp4 或 .mp4 之類的副檔名
                         title = re.sub(r'\.(f\d+\.)?\w+$', '', raw_title)
                         q.put(('title', title))
                         if not is_playlist:
@@ -134,21 +141,18 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
                         q.put(('phase', 'audio'))
                 continue
 
-            # 合併階段
             if '[Merger]' in line:
                 q.put(('progress', 'audio', 100.0))
                 phase = 'merge'
                 q.put(('phase', 'merge'))
                 continue
 
-            # 轉換階段
             if '[ExtractAudio]' in line:
                 q.put(('progress', 'audio', 100.0))
                 phase = 'convert'
                 q.put(('phase', 'convert'))
                 continue
 
-            # 下載百分比
             mm = PCT_PATTERN.search(line)
             if mm and phase in ('video', 'audio'):
                 q.put(('progress', phase, float(mm.group(1))))
@@ -191,47 +195,80 @@ class DownloadItem:
         self._start()
 
     def _build_ui(self, parent):
-        self.frame = tk.Frame(parent, relief=tk.RIDGE, borderwidth=1)
-        self.frame.pack(fill=tk.X, padx=5, pady=2)
+        self.frame = tk.Frame(
+            parent,
+            bg=CARD_BG,
+            highlightbackground=BORDER,
+            highlightthickness=1
+        )
+        self.frame.pack(fill=tk.X, padx=6, pady=3)
 
-        # 第一列：類型標籤 + 標題
-        row0 = tk.Frame(self.frame)
-        row0.grid(row=0, column=0, sticky='ew', padx=5, pady=(5, 0))
+        # ── 左側：徽章 + 標題 + URL ──
+        left = tk.Frame(self.frame, bg=CARD_BG)
+        left.grid(row=0, column=0, sticky='nsew', padx=(10, 6), pady=8)
 
-        tk.Label(row0,
-                 text=f'[{TYPE_LABELS.get(self._download_type, "")}]',
-                 fg='white', bg='#555555',
-                 font=('Arial', 8), padx=4, pady=1).pack(side=tk.LEFT)
+        top_row = tk.Frame(left, bg=CARD_BG)
+        top_row.pack(anchor='w', fill=tk.X)
 
-        self._title_label = tk.Label(row0, text=self._url,
-                                     anchor='w', font=('Arial', 9, 'bold'))
-        self._title_label.pack(side=tk.LEFT, padx=(5, 0))
+        bbg, bfg = BADGE_CFG.get(self._download_type, ('#f0f0f0', '#555555'))
+        tk.Label(
+            top_row,
+            text=TYPE_LABELS.get(self._download_type, ''),
+            bg=bbg, fg=bfg,
+            font=(FONT, 8),
+            padx=6, pady=2,
+            relief=tk.FLAT
+        ).pack(side=tk.LEFT)
 
-        # 第二列：URL
-        tk.Label(self.frame, text=self._url,
-                 fg='gray', font=('Arial', 8),
-                 anchor='w').grid(row=1, column=0, sticky='ew', padx=5, pady=(0, 5))
+        self._title_label = tk.Label(
+            top_row,
+            text=self._url,
+            bg=CARD_BG, fg='#1a1a1a',
+            font=(FONT, 9, 'bold'),
+            anchor='w'
+        )
+        self._title_label.pack(side=tk.LEFT, padx=(8, 0))
 
-        # 右側進度區（rowspan=2）
-        prog = tk.Frame(self.frame)
-        prog.grid(row=0, column=1, rowspan=2, sticky='ns', padx=(0, 8), pady=5)
+        tk.Label(
+            left,
+            text=self._url,
+            bg=CARD_BG, fg='#888888',
+            font=(FONT, 8),
+            anchor='w'
+        ).pack(anchor='w', pady=(3, 0))
 
-        self._bar = ttk.Progressbar(prog, length=200, mode='determinate', maximum=100)
+        # ── 右側：進度條 + 狀態 + 按鈕 ──
+        right = tk.Frame(self.frame, bg=CARD_BG)
+        right.grid(row=0, column=1, sticky='ns', padx=(0, 10), pady=8)
+
+        self._bar = ttk.Progressbar(right, length=200, mode='determinate', maximum=100)
         self._bar.pack()
 
-        self._status_label = tk.Label(prog, text='準備中', font=('Arial', 8), width=22)
-        self._status_label.pack(pady=(2, 0))
+        self._status_label = tk.Label(
+            right,
+            text='準備中',
+            bg=CARD_BG, fg='#888888',
+            font=(FONT, 8),
+            width=22
+        )
+        self._status_label.pack(pady=(3, 0))
 
-        self._stop_btn = tk.Button(prog, text='中止', font=('Arial', 8),
-                                   fg='#c0392b', command=self._stop_download)
-        self._stop_btn.pack(pady=(4, 0))
+        self._stop_btn = ttk.Button(right, text='中止', command=self._stop_download)
+        self._stop_btn.pack(pady=(5, 0))
 
-        self._error_btn = tk.Button(prog, text='查看錯誤', font=('Arial', 8),
-                                    fg='red', command=self._show_error)
+        self._error_btn = ttk.Button(right, text='查看錯誤', command=self._show_error)
 
-        tk.Button(self.frame, text='✕', font=('Arial', 10), fg='#999999',
-                  relief=tk.FLAT, cursor='hand2',
-                  command=self._delete).grid(row=0, column=2, sticky='ne', padx=(0, 4), pady=(3, 0))
+        # ── 刪除鈕 ──
+        tk.Button(
+            self.frame,
+            text='✕',
+            bg=CARD_BG, fg='#bbbbbb',
+            activebackground=CARD_BG, activeforeground='#555555',
+            font=(FONT, 10),
+            relief=tk.FLAT, bd=0,
+            cursor='hand2',
+            command=self._delete
+        ).grid(row=0, column=2, sticky='ne', padx=(0, 6), pady=(6, 0))
 
         self.frame.columnconfigure(0, weight=1)
 
@@ -288,13 +325,13 @@ class DownloadItem:
                     if msg[1]:
                         self._bar.config(mode='determinate')
                         self._bar['value'] = 100
-                        self._status_label.config(text='完成', fg='#2e7d32')
+                        self._status_label.config(text='完成', fg='#107c10')
                     else:
                         self._error_text = msg[2]
                         self._bar.config(mode='determinate')
                         self._bar['value'] = 0
-                        self._status_label.config(text='失敗', fg='red')
-                        self._error_btn.pack(pady=(4, 0))
+                        self._status_label.config(text='失敗', fg='#c42b1c')
+                        self._error_btn.pack(pady=(5, 0))
                     return
 
                 elif kind == 'done_partial':
@@ -305,8 +342,8 @@ class DownloadItem:
                     self._bar.config(mode='determinate')
                     self._bar['value'] = 100
                     self._status_label.config(
-                        text=f'部分失敗 ({succeeded}/{total} 成功)', fg='#e65100')
-                    self._error_btn.pack(pady=(4, 0))
+                        text=f'部分失敗 ({succeeded}/{total} 成功)', fg='#9d5d00')
+                    self._error_btn.pack(pady=(5, 0))
                     return
 
                 elif kind == 'done_stop':
@@ -314,7 +351,7 @@ class DownloadItem:
                     self._bar.stop()
                     self._bar.config(mode='determinate')
                     self._bar['value'] = 0
-                    self._status_label.config(text='已中止', fg='#888888')
+                    self._status_label.config(text='已中止', fg='#767676')
                     return
 
         except queue.Empty:
@@ -330,18 +367,26 @@ class DownloadItem:
             'merge':   '合併中...',
             'convert': '轉換中...',
         }.get(self._current_phase, '')
-        self._status_label.config(text=f'{prefix}{phase_text}')
+        self._status_label.config(text=f'{prefix}{phase_text}', fg='#555555')
 
     def _show_error(self):
         title = self._title_label.cget('text')
         win   = tk.Toplevel()
         win.title(f'錯誤詳情 - {title}')
-        win.geometry('620x400')
+        win.geometry('660x420')
 
-        frame = tk.Frame(win)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
+        frame = ttk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(12, 6))
 
-        text   = tk.Text(frame, wrap=tk.WORD, font=('Consolas', 9))
+        text = tk.Text(
+            frame,
+            wrap=tk.WORD,
+            font=('Consolas', 9),
+            bg=CARD_BG, fg='#1a1a1a',
+            relief=tk.FLAT, bd=0,
+            highlightbackground=BORDER,
+            highlightthickness=1
+        )
         scroll = ttk.Scrollbar(frame, orient='vertical', command=text.yview)
         text.configure(yscrollcommand=scroll.set)
 
@@ -350,7 +395,7 @@ class DownloadItem:
         text.insert('1.0', self._error_text)
         text.config(state=tk.DISABLED)
 
-        tk.Button(win, text='關閉', command=win.destroy).pack(pady=(0, 8))
+        ttk.Button(win, text='關閉', command=win.destroy).pack(pady=(0, 10))
 
     def _stop_download(self):
         self._stop_event.set()
@@ -369,67 +414,70 @@ class DownloaderGUI:
         self.root = root
         self.root.title("YouTube 下載器")
 
-        window_width, window_height = 650, 560
+        window_width, window_height = 660, 560
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         self.root.geometry(
             f'{window_width}x{window_height}'
             f'+{int(sw/2 - window_width/2)}+{int(sh/2 - window_height/2)}'
         )
 
+        # 取得 sv_ttk 套用後的實際背景色，用於 canvas 等非 ttk 元件
+        theme_bg = ttk.Style().lookup('TFrame', 'background') or '#f9f9f9'
+
         # ── 輸入區 ──
-        inp = tk.Frame(root)
-        inp.pack(fill=tk.X, padx=15, pady=(15, 0))
+        inp = ttk.Frame(root)
+        inp.pack(fill=tk.X, padx=16, pady=(16, 0))
 
-        tk.Label(inp, text="YouTube 網址:").pack(anchor='w')
-        self.url_entry = tk.Entry(inp, width=72)
-        self.url_entry.pack(fill=tk.X, pady=(2, 8))
+        ttk.Label(inp, text="YouTube 網址").pack(anchor='w')
+        self.url_entry = ttk.Entry(inp, font=(FONT, 10))
+        self.url_entry.pack(fill=tk.X, pady=(3, 10))
 
-        tk.Label(inp, text="輸出格式:").pack(anchor='w')
+        ttk.Label(inp, text="輸出格式").pack(anchor='w')
         self.download_type = tk.StringVar(value="video_best")
 
-        vf = tk.Frame(inp)
-        vf.pack(anchor='w', pady=(2, 2))
-        tk.Radiobutton(vf, text="影片 - 最高畫質 MP4（含 VP9/AV1）",
-                       variable=self.download_type, value="video_best").pack(side=tk.LEFT)
-        tk.Radiobutton(vf, text="影片 - 相容模式 MP4（H.264）",
-                       variable=self.download_type, value="video_h264").pack(side=tk.LEFT, padx=(10, 0))
+        vf = ttk.Frame(inp)
+        vf.pack(anchor='w', pady=(3, 2))
+        ttk.Radiobutton(vf, text="影片 - 最高畫質 MP4（含 VP9/AV1）",
+                        variable=self.download_type, value="video_best").pack(side=tk.LEFT)
+        ttk.Radiobutton(vf, text="影片 - 相容模式 MP4（H.264）",
+                        variable=self.download_type, value="video_h264").pack(side=tk.LEFT, padx=(12, 0))
 
-        af = tk.Frame(inp)
-        af.pack(anchor='w', pady=(0, 8))
-        tk.Radiobutton(af, text="音訊 - MP3",
-                       variable=self.download_type, value="mp3").pack(side=tk.LEFT)
-        tk.Radiobutton(af, text="音訊 - M4A",
-                       variable=self.download_type, value="m4a").pack(side=tk.LEFT, padx=(10, 0))
+        af = ttk.Frame(inp)
+        af.pack(anchor='w', pady=(0, 10))
+        ttk.Radiobutton(af, text="音訊 - MP3",
+                        variable=self.download_type, value="mp3").pack(side=tk.LEFT)
+        ttk.Radiobutton(af, text="音訊 - M4A",
+                        variable=self.download_type, value="m4a").pack(side=tk.LEFT, padx=(12, 0))
 
-        bot = tk.Frame(inp)
-        bot.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(bot, text="下載位置:").pack(side=tk.LEFT)
-        self.path_entry = tk.Entry(bot, width=44)
+        bot = ttk.Frame(inp)
+        bot.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(bot, text="下載位置").pack(side=tk.LEFT)
+        self.path_entry = ttk.Entry(bot, font=(FONT, 9))
         self.path_entry.insert(0, os.getcwd())
-        self.path_entry.pack(side=tk.LEFT, padx=5)
-        tk.Button(bot, text="瀏覽", command=self.browse_path).pack(side=tk.LEFT)
-        tk.Button(bot, text="加入下載", bg="#4CAF50", fg="white",
-                  font=("Arial", 10, "bold"),
-                  command=self.add_download).pack(side=tk.RIGHT)
+        self.path_entry.pack(side=tk.LEFT, padx=(8, 6), fill=tk.X, expand=True)
+        ttk.Button(bot, text="瀏覽", command=self.browse_path).pack(side=tk.LEFT)
+        ttk.Button(bot, text="加入下載", style='Accent.TButton',
+                   command=self.add_download).pack(side=tk.RIGHT)
 
         # ── 分隔線 ──
-        ttk.Separator(root, orient='horizontal').pack(fill=tk.X, padx=10, pady=(0, 5))
+        ttk.Separator(root, orient='horizontal').pack(fill=tk.X, padx=12, pady=(0, 4))
 
         # ── 清單標題 ──
-        tk.Label(root, text="下載清單", font=('Arial', 9, 'bold')).pack(anchor='w', padx=15)
+        ttk.Label(root, text="下載清單", font=(FONT, 9, 'bold')).pack(
+            anchor='w', padx=16, pady=(6, 4))
 
         # ── 可捲動清單 ──
-        wrap = tk.Frame(root)
-        wrap.pack(fill=tk.BOTH, expand=True, padx=10, pady=(3, 10))
+        wrap = ttk.Frame(root)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        self._canvas = tk.Canvas(wrap, highlightthickness=0)
+        self._canvas = tk.Canvas(wrap, highlightthickness=0, bg=theme_bg)
         sb = ttk.Scrollbar(wrap, orient='vertical', command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=sb.set)
 
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self._inner = tk.Frame(self._canvas)
+        self._inner = tk.Frame(self._canvas, bg=theme_bg)
         self._cwin  = self._canvas.create_window((0, 0), window=self._inner, anchor='nw')
 
         self._inner.bind('<Configure>', lambda e: self._canvas.configure(
@@ -459,9 +507,23 @@ class DownloaderGUI:
 
 
 def main():
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
     root = tk.Tk()
+    sv_ttk.set_theme('light')
+
+    try:
+        root.iconbitmap(resource_path('icon.ico'))
+    except Exception:
+        pass
+
     app  = DownloaderGUI(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
