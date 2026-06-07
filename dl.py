@@ -64,14 +64,14 @@ def run_download(url, output_path, download_type, q):
 
         proc = subprocess.Popen(
             command,
-            stderr=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             bufsize=1,
             text=True,
             cwd=output_path
         )
 
-        for raw in proc.stderr:
+        for raw in proc.stdout:
             line = raw.strip()
             if not line:
                 continue
@@ -170,6 +170,7 @@ class DownloadItem:
         self._pl_total      = 0
         self._current_phase = None
         self._current_pct   = 0.0
+        self._destroyed     = False
 
         self._build_ui(parent)
         self._start()
@@ -209,6 +210,10 @@ class DownloadItem:
         self._error_btn = tk.Button(prog, text='查看錯誤', font=('Arial', 8),
                                     fg='red', command=self._show_error)
 
+        tk.Button(self.frame, text='✕', font=('Arial', 10), fg='#999999',
+                  relief=tk.FLAT, cursor='hand2',
+                  command=self._delete).grid(row=0, column=2, sticky='ne', padx=(0, 4), pady=(3, 0))
+
         self.frame.columnconfigure(0, weight=1)
 
     def _start(self):
@@ -220,6 +225,8 @@ class DownloadItem:
         self.frame.after(100, self._poll)
 
     def _poll(self):
+        if self._destroyed:
+            return
         try:
             while True:
                 msg  = self._q.get_nowait()
@@ -309,6 +316,10 @@ class DownloadItem:
         text.config(state=tk.DISABLED)
 
         tk.Button(win, text='關閉', command=win.destroy).pack(pady=(0, 8))
+
+    def _delete(self):
+        self._destroyed = True
+        self.frame.destroy()
 
 
 class DownloaderGUI:
