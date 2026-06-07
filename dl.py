@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox
 import tkinter.ttk as ttk
 
 PCT_PATTERN      = re.compile(r'\[download\]\s+([\d.]+)%')
-PLAYLIST_PATTERN = re.compile(r'\[download\] Downloading video (\d+) of (\d+)')
+PLAYLIST_PATTERN = re.compile(r'\[download\] Downloading (?:video|item) (\d+) of (\d+)')
 
 TYPE_LABELS = {
     'video_best': '影片 - 最高畫質',
@@ -236,8 +236,13 @@ class DownloadItem:
                     self._title_label.config(text=msg[1])
 
                 elif kind == 'playlist':
-                    self._pl_current = msg[1]
-                    self._pl_total   = msg[2]
+                    self._pl_current    = msg[1]
+                    self._pl_total      = msg[2]
+                    self._current_phase = None
+                    self._current_pct   = 0.0
+                    self._bar.stop()
+                    self._bar.config(mode='determinate')
+                    self._bar['value'] = 0
                     self._update_status()
 
                 elif kind == 'phase':
@@ -391,7 +396,7 @@ class DownloaderGUI:
         self._cwin  = self._canvas.create_window((0, 0), window=self._inner, anchor='nw')
 
         self._inner.bind('<Configure>', lambda e: self._canvas.configure(
-            scrollregion=self._canvas.bbox('all')))
+            scrollregion=(0, 0, e.width, e.height)))
         self._canvas.bind('<Configure>', lambda e: self._canvas.itemconfig(
             self._cwin, width=e.width))
         self._canvas.bind_all('<MouseWheel>', lambda e: self._canvas.yview_scroll(
