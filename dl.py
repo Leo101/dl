@@ -1,104 +1,390 @@
 import sys
 import subprocess
 import os
+import re
+import threading
+import queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import tkinter.ttk as ttk
+
+PCT_PATTERN      = re.compile(r'\[download\]\s+([\d.]+)%')
+PLAYLIST_PATTERN = re.compile(r'\[download\] Downloading video (\d+) of (\d+)')
+
+TYPE_LABELS = {
+    'video_best': '影片 - 最高畫質',
+    'video_h264': '影片 - 相容模式',
+    'mp3':        '音訊 - MP3',
+    'm4a':        '音訊 - M4A',
+}
+
 
 def resource_path(relative_path):
-    """ 取得資源絕對路徑 (相容開發環境與 PyInstaller) """
     try:
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-def download_video(url, output_path, download_type):
+
+def run_download(url, output_path, download_type, q):
     try:
         os.makedirs(output_path, exist_ok=True)
-        os.chdir(output_path)
-        
-        yt_dlp_path = resource_path("yt-dlp.exe")
-        ffmpeg_path = resource_path("") 
 
-        # 基礎指令
+        yt_dlp_path = resource_path("yt-dlp.exe")
+        ffmpeg_path = resource_path("")
+
         command = [
             yt_dlp_path,
             '--ffmpeg-location', ffmpeg_path,
+            '--newline',
             '-o', '%(upload_date)s - [%(uploader)s][%(id)s] %(title)s.%(ext)s',
             url
         ]
 
-        # 根據選項決定參數
-        if download_type == 'video_mp4':
-            command.extend([
-                '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-                '--merge-output-format', 'mp4'
-            ])
-        elif download_type == 'audio_opus':
-            command.extend(['--extract-audio', '--audio-format', 'opus'])
-        elif download_type == 'audio_m4a':
-            command.extend(['--extract-audio', '--audio-format', 'm4a'])
-        elif download_type == 'audio_mp3':
-            command.extend(['--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
-        
-        # 執行下載
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        messagebox.showinfo("下載完成", f"檔案已成功下載到:\n{output_path}")
-        return True
+        is_video = download_type in ('video_h264', 'video_best')
 
-    except subprocess.CalledProcessError as e:
-        messagebox.showerror("錯誤", f"下載失敗: {e.stderr}")
-        return False
+        if download_type == 'video_h264':
+            command.extend(['-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4', '--merge-output-format', 'mp4'])
+        elif download_type == 'video_best':
+            command.extend(['-f', 'bestvideo+bestaudio/best', '--merge-output-format', 'mp4'])
+        elif download_type == 'mp3':
+            command.extend(['--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
+        elif download_type == 'm4a':
+            command.extend(['--extract-audio', '--audio-format', 'm4a'])
+
+        phase          = None
+        dest_count     = 0
+        is_playlist    = False
+        current_video  = 0
+        total_videos   = 0
+        title_sent     = False
+        stderr_lines   = []
+        error_segments = []  # list of (video_index, error_line)
+
+        proc = subprocess.Popen(
+            command,
+            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            bufsize=1,
+            text=True,
+            cwd=output_path
+        )
+
+        for raw in proc.stderr:
+            line = raw.strip()
+            if not line:
+                continue
+            stderr_lines.append(line)
+
+            # Playlist 進度行：Downloading video X of Y
+            pm = PLAYLIST_PATTERN.match(line)
+            if pm:
+                is_playlist   = True
+                current_video = int(pm.group(1))
+                total_videos  = int(pm.group(2))
+                dest_count    = 0
+                phase         = None
+                title_sent    = False
+                q.put(('playlist', current_video, total_videos))
+                continue
+
+            # 錯誤行
+            if line.startswith('ERROR:'):
+                if is_playlist:
+                    error_segments.append((current_video, line))
+                continue
+
+            # Destination 行：判斷階段 + 解析標題
+            if '[download] Destination:' in line:
+                dest_count += 1
+                filename = line.split('[download] Destination:', 1)[1].strip()
+
+                # 從檔名解析標題（格式：YYYYMMDD - [uploader][id] title.ext）
+                if not title_sent or is_playlist:
+                    parts = filename.rsplit('] ', 1)
+                    if len(parts) == 2:
+                        raw_title = parts[1]
+                        # 移除 .f137.mp4 或 .mp4 之類的副檔名
+                        title = re.sub(r'\.(f\d+\.)?\w+$', '', raw_title)
+                        q.put(('title', title))
+                        if not is_playlist:
+                            title_sent = True
+
+                if is_video:
+                    if dest_count == 1:
+                        phase = 'video'
+                        q.put(('phase', 'video'))
+                    elif dest_count == 2:
+                        q.put(('progress', 'video', 100.0))
+                        phase = 'audio'
+                        q.put(('phase', 'audio'))
+                else:
+                    if dest_count == 1:
+                        phase = 'audio'
+                        q.put(('phase', 'audio'))
+                continue
+
+            # 合併階段
+            if '[Merger]' in line:
+                q.put(('progress', 'audio', 100.0))
+                phase = 'merge'
+                q.put(('phase', 'merge'))
+                continue
+
+            # 轉換階段
+            if '[ExtractAudio]' in line:
+                q.put(('progress', 'audio', 100.0))
+                phase = 'convert'
+                q.put(('phase', 'convert'))
+                continue
+
+            # 下載百分比
+            mm = PCT_PATTERN.search(line)
+            if mm and phase in ('video', 'audio'):
+                q.put(('progress', phase, float(mm.group(1))))
+
+        proc.wait()
+
+        if error_segments:
+            succeeded  = total_videos - len(error_segments)
+            error_text = '\n\n'.join(f'[影片 {idx}]\n{err}' for idx, err in error_segments)
+            q.put(('done_partial', succeeded, total_videos, error_text))
+        elif proc.returncode != 0:
+            q.put(('done', False, '\n'.join(stderr_lines)))
+        else:
+            q.put(('done', True, ''))
+
     except Exception as e:
-        messagebox.showerror("錯誤", f"發生未知錯誤：{str(e)}")
-        return False
+        q.put(('done', False, str(e)))
+
+
+class DownloadItem:
+    def __init__(self, parent, url, download_type, output_path):
+        self._url           = url
+        self._output_path   = output_path
+        self._download_type = download_type
+        self._q             = queue.Queue()
+        self._error_text    = ''
+        self._pl_current    = 0
+        self._pl_total      = 0
+        self._current_phase = None
+        self._current_pct   = 0.0
+
+        self._build_ui(parent)
+        self._start()
+
+    def _build_ui(self, parent):
+        self.frame = tk.Frame(parent, relief=tk.RIDGE, borderwidth=1)
+        self.frame.pack(fill=tk.X, padx=5, pady=2)
+
+        # 第一列：類型標籤 + 標題
+        row0 = tk.Frame(self.frame)
+        row0.grid(row=0, column=0, sticky='ew', padx=5, pady=(5, 0))
+
+        tk.Label(row0,
+                 text=f'[{TYPE_LABELS.get(self._download_type, "")}]',
+                 fg='white', bg='#555555',
+                 font=('Arial', 8), padx=4, pady=1).pack(side=tk.LEFT)
+
+        self._title_label = tk.Label(row0, text=self._url,
+                                     anchor='w', font=('Arial', 9, 'bold'))
+        self._title_label.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 第二列：URL
+        tk.Label(self.frame, text=self._url,
+                 fg='gray', font=('Arial', 8),
+                 anchor='w').grid(row=1, column=0, sticky='ew', padx=5, pady=(0, 5))
+
+        # 右側進度區（rowspan=2）
+        prog = tk.Frame(self.frame)
+        prog.grid(row=0, column=1, rowspan=2, sticky='ns', padx=(0, 8), pady=5)
+
+        self._bar = ttk.Progressbar(prog, length=200, mode='determinate', maximum=100)
+        self._bar.pack()
+
+        self._status_label = tk.Label(prog, text='準備中', font=('Arial', 8), width=22)
+        self._status_label.pack(pady=(2, 0))
+
+        self._error_btn = tk.Button(prog, text='查看錯誤', font=('Arial', 8),
+                                    fg='red', command=self._show_error)
+
+        self.frame.columnconfigure(0, weight=1)
+
+    def _start(self):
+        threading.Thread(
+            target=run_download,
+            args=(self._url, self._output_path, self._download_type, self._q),
+            daemon=True
+        ).start()
+        self.frame.after(100, self._poll)
+
+    def _poll(self):
+        try:
+            while True:
+                msg  = self._q.get_nowait()
+                kind = msg[0]
+
+                if kind == 'title':
+                    self._title_label.config(text=msg[1])
+
+                elif kind == 'playlist':
+                    self._pl_current = msg[1]
+                    self._pl_total   = msg[2]
+                    self._update_status()
+
+                elif kind == 'phase':
+                    self._current_phase = msg[1]
+                    self._current_pct   = 0.0
+                    if msg[1] in ('merge', 'convert'):
+                        self._bar.config(mode='indeterminate')
+                        self._bar.start(10)
+                    else:
+                        self._bar.stop()
+                        self._bar.config(mode='determinate')
+                        self._bar['value'] = 0
+                    self._update_status()
+
+                elif kind == 'progress':
+                    self._current_pct  = msg[2]
+                    self._bar['value'] = msg[2]
+                    self._update_status()
+
+                elif kind == 'done':
+                    self._bar.stop()
+                    if msg[1]:
+                        self._bar.config(mode='determinate')
+                        self._bar['value'] = 100
+                        self._status_label.config(text='完成', fg='#2e7d32')
+                    else:
+                        self._error_text = msg[2]
+                        self._bar.config(mode='determinate')
+                        self._bar['value'] = 0
+                        self._status_label.config(text='失敗', fg='red')
+                        self._error_btn.pack(pady=(4, 0))
+                    return
+
+                elif kind == 'done_partial':
+                    _, succeeded, total, error_text = msg
+                    self._error_text = error_text
+                    self._bar.stop()
+                    self._bar.config(mode='determinate')
+                    self._bar['value'] = 100
+                    self._status_label.config(
+                        text=f'部分失敗 ({succeeded}/{total} 成功)', fg='#e65100')
+                    self._error_btn.pack(pady=(4, 0))
+                    return
+
+        except queue.Empty:
+            pass
+
+        self.frame.after(100, self._poll)
+
+    def _update_status(self):
+        prefix = f'影片 {self._pl_current}/{self._pl_total} · ' if self._pl_total > 0 else ''
+        phase_text = {
+            'video':   f'影像串流 {self._current_pct:.0f}%',
+            'audio':   f'音訊串流 {self._current_pct:.0f}%',
+            'merge':   '合併中...',
+            'convert': '轉換中...',
+        }.get(self._current_phase, '')
+        self._status_label.config(text=f'{prefix}{phase_text}')
+
+    def _show_error(self):
+        title = self._title_label.cget('text')
+        win   = tk.Toplevel()
+        win.title(f'錯誤詳情 - {title}')
+        win.geometry('620x400')
+
+        frame = tk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
+
+        text   = tk.Text(frame, wrap=tk.WORD, font=('Consolas', 9))
+        scroll = ttk.Scrollbar(frame, orient='vertical', command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text.insert('1.0', self._error_text)
+        text.config(state=tk.DISABLED)
+
+        tk.Button(win, text='關閉', command=win.destroy).pack(pady=(0, 8))
+
 
 class DownloaderGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("YouTube 下載器")
-        self.root.geometry("600x350")
-        
-        # 1. URL 輸入
-        tk.Label(root, text="YouTube 網址:").pack(pady=(15, 0))
-        self.url_entry = tk.Entry(root, width=70)
-        self.url_entry.pack(pady=5)
-        
-        # 2. 輸出格式選擇 (四個選項)
-        tk.Label(root, text="選擇輸出格式:").pack(pady=(10, 0))
-        self.download_type = tk.StringVar(value="video_mp4")
-        
-        radio_frame = tk.Frame(root)
-        radio_frame.pack(pady=5)
-        
-        # 第一排：影片
-        tk.Radiobutton(radio_frame, text="影片 (MP4)", variable=self.download_type, 
-                       value="video_mp4").grid(row=0, column=0, padx=10, sticky="w")
-        
-        # 第二排：音訊選項
-        tk.Radiobutton(radio_frame, text="音訊 (Opus)", variable=self.download_type, 
-                       value="audio_opus").grid(row=1, column=0, padx=10, pady=5)
-        tk.Radiobutton(radio_frame, text="音訊 (M4A)", variable=self.download_type, 
-                       value="audio_m4a").grid(row=1, column=1, padx=10, pady=5)
-        tk.Radiobutton(radio_frame, text="音訊 (MP3)", variable=self.download_type, 
-                       value="audio_mp3").grid(row=1, column=2, padx=10, pady=5)
-        
-        # 3. 下載位置
-        tk.Label(root, text="下載位置:").pack(pady=(10, 0))
-        self.path_frame = tk.Frame(root)
-        self.path_frame.pack(pady=5)
-        
-        self.path_entry = tk.Entry(self.path_frame, width=50)
+
+        window_width, window_height = 650, 560
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        self.root.geometry(
+            f'{window_width}x{window_height}'
+            f'+{int(sw/2 - window_width/2)}+{int(sh/2 - window_height/2)}'
+        )
+
+        # ── 輸入區 ──
+        inp = tk.Frame(root)
+        inp.pack(fill=tk.X, padx=15, pady=(15, 0))
+
+        tk.Label(inp, text="YouTube 網址:").pack(anchor='w')
+        self.url_entry = tk.Entry(inp, width=72)
+        self.url_entry.pack(fill=tk.X, pady=(2, 8))
+
+        tk.Label(inp, text="輸出格式:").pack(anchor='w')
+        self.download_type = tk.StringVar(value="video_best")
+
+        vf = tk.Frame(inp)
+        vf.pack(anchor='w', pady=(2, 2))
+        tk.Radiobutton(vf, text="影片 - 最高畫質 MP4（含 VP9/AV1）",
+                       variable=self.download_type, value="video_best").pack(side=tk.LEFT)
+        tk.Radiobutton(vf, text="影片 - 相容模式 MP4（H.264）",
+                       variable=self.download_type, value="video_h264").pack(side=tk.LEFT, padx=(10, 0))
+
+        af = tk.Frame(inp)
+        af.pack(anchor='w', pady=(0, 8))
+        tk.Radiobutton(af, text="音訊 - MP3",
+                       variable=self.download_type, value="mp3").pack(side=tk.LEFT)
+        tk.Radiobutton(af, text="音訊 - M4A",
+                       variable=self.download_type, value="m4a").pack(side=tk.LEFT, padx=(10, 0))
+
+        bot = tk.Frame(inp)
+        bot.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(bot, text="下載位置:").pack(side=tk.LEFT)
+        self.path_entry = tk.Entry(bot, width=44)
         self.path_entry.insert(0, os.getcwd())
         self.path_entry.pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(self.path_frame, text="瀏覽", command=self.browse_path).pack(side=tk.LEFT)
-        
-        # 4. 下載按鈕
-        self.download_button = tk.Button(root, text="開始下載", bg="#4CAF50", fg="white", 
-                                        font=("Arial", 10, "bold"), width=20, 
-                                        command=self.start_download)
-        self.download_button.pack(pady=25)
+        tk.Button(bot, text="瀏覽", command=self.browse_path).pack(side=tk.LEFT)
+        tk.Button(bot, text="加入下載", bg="#4CAF50", fg="white",
+                  font=("Arial", 10, "bold"),
+                  command=self.add_download).pack(side=tk.RIGHT)
+
+        # ── 分隔線 ──
+        ttk.Separator(root, orient='horizontal').pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        # ── 清單標題 ──
+        tk.Label(root, text="下載清單", font=('Arial', 9, 'bold')).pack(anchor='w', padx=15)
+
+        # ── 可捲動清單 ──
+        wrap = tk.Frame(root)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=10, pady=(3, 10))
+
+        self._canvas = tk.Canvas(wrap, highlightthickness=0)
+        sb = ttk.Scrollbar(wrap, orient='vertical', command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=sb.set)
+
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._inner = tk.Frame(self._canvas)
+        self._cwin  = self._canvas.create_window((0, 0), window=self._inner, anchor='nw')
+
+        self._inner.bind('<Configure>', lambda e: self._canvas.configure(
+            scrollregion=self._canvas.bbox('all')))
+        self._canvas.bind('<Configure>', lambda e: self._canvas.itemconfig(
+            self._cwin, width=e.width))
+        self._canvas.bind_all('<MouseWheel>', lambda e: self._canvas.yview_scroll(
+            int(-1 * (e.delta / 120)), 'units'))
 
     def browse_path(self):
         path = filedialog.askdirectory()
@@ -106,29 +392,23 @@ class DownloaderGUI:
             self.path_entry.delete(0, tk.END)
             self.path_entry.insert(0, path)
 
-    def start_download(self):
-        url = self.url_entry.get().strip()
-        path = self.path_entry.get().strip()
+    def add_download(self):
+        url   = self.url_entry.get().strip()
+        path  = self.path_entry.get().strip()
         dtype = self.download_type.get()
-        
+
         if not url:
             messagebox.showwarning("警告", "請輸入 YouTube 網址")
             return
-            
-        self.download_button.config(state=tk.DISABLED, text="下載中...")
-        self.root.update()
-        
-        try:
-            if download_video(url, path, dtype):
-                self.url_entry.delete(0, tk.END)
-        finally:
-            self.download_button.config(state=tk.NORMAL, text="開始下載")
+
+        DownloadItem(self._inner, url, dtype, path)
+        self.url_entry.delete(0, tk.END)
+
+
+def main():
+    root = tk.Tk()
+    app  = DownloaderGUI(root)
+    root.mainloop()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    try:
-        root.iconbitmap(resource_path("icon.ico"))
-    except:
-        pass
-    app = DownloaderGUI(root)
-    root.mainloop()
+    main()
