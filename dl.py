@@ -16,7 +16,6 @@ FONT    = 'Segoe UI'
 BADGE_CFG = {
     'video_best': ('#dce8fb', '#1a5fc8'),
     'video_h264': ('#dce8fb', '#1a5fc8'),
-    'mp3':        ('#dff0e0', '#1e7a34'),
     'm4a':        ('#dff0e0', '#1e7a34'),
 }
 
@@ -26,9 +25,26 @@ PLAYLIST_PATTERN = re.compile(r'\[download\] Downloading (?:video|item) (\d+) of
 TYPE_LABELS = {
     'video_best': '影片 - 最高畫質',
     'video_h264': '影片 - 相容模式',
-    'mp3':        '音訊 - MP3',
     'm4a':        '音訊 - M4A',
 }
+
+_BTN_COLORS = {
+    'blue':   ('#0078d4', '#005a9e', 'white'),
+    'red':    ('#c42b1c', '#a02216', 'white'),
+    'orange': ('#c55a00', '#a04800', 'white'),
+    'green':  ('#107c10', '#0a5e0a', 'white'),
+}
+
+def _make_btn(parent, text, color, command, font_size=9, **kw):
+    bg, abg, fg = _BTN_COLORS[color]
+    return tk.Button(
+        parent, text=text, bg=bg, fg=fg,
+        activebackground=abg, activeforeground=fg,
+        command=command,
+        relief=tk.FLAT, bd=0, cursor='hand2',
+        font=(FONT, font_size),
+        **kw
+    )
 
 
 def resource_path(relative_path):
@@ -63,8 +79,6 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
             command.extend(['-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4', '--merge-output-format', 'mp4'])
         elif download_type == 'video_best':
             command.extend(['-f', 'bestvideo+bestaudio/best', '--merge-output-format', 'mp4'])
-        elif download_type == 'mp3':
-            command.extend(['--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
         elif download_type == 'm4a':
             command.extend(['--extract-audio', '--audio-format', 'm4a'])
 
@@ -253,21 +267,16 @@ class DownloadItem:
         )
         self._status_label.pack(pady=(3, 0))
 
-        self._stop_btn = ttk.Button(right, text='中止', command=self._stop_download)
+        self._stop_btn = _make_btn(right, '中止', 'red', self._stop_download)
         self._stop_btn.pack(pady=(5, 0))
 
-        self._error_btn = ttk.Button(right, text='查看錯誤', command=self._show_error)
+        self._error_btn = _make_btn(right, '查看錯誤', 'orange', self._show_error)
+
+        _make_btn(right, '複製 URL', 'blue', self._copy_url).pack(pady=(5, 0))
 
         # ── 刪除鈕 ──
-        tk.Button(
-            self.frame,
-            text='✕',
-            bg=CARD_BG, fg='#bbbbbb',
-            activebackground=CARD_BG, activeforeground='#555555',
-            font=(FONT, 10),
-            relief=tk.FLAT, bd=0,
-            cursor='hand2',
-            command=self._delete
+        _make_btn(
+            self.frame, '✕', 'red', self._delete, font_size=10
         ).grid(row=0, column=2, sticky='ne', padx=(0, 6), pady=(6, 0))
 
         self.frame.columnconfigure(0, weight=1)
@@ -395,7 +404,7 @@ class DownloadItem:
         text.insert('1.0', self._error_text)
         text.config(state=tk.DISABLED)
 
-        ttk.Button(win, text='關閉', command=win.destroy).pack(pady=(0, 10))
+        _make_btn(win, '關閉', 'blue', win.destroy).pack(pady=(0, 10))
 
     def _stop_download(self):
         self._stop_event.set()
@@ -403,6 +412,10 @@ class DownloadItem:
         if proc is not None:
             proc.terminate()
         self._stop_btn.config(state=tk.DISABLED, text='中止中...')
+
+    def _copy_url(self):
+        self.frame.clipboard_clear()
+        self.frame.clipboard_append(self._url)
 
     def _delete(self):
         self._destroyed = True
@@ -444,10 +457,8 @@ class DownloaderGUI:
 
         af = ttk.Frame(inp)
         af.pack(anchor='w', pady=(0, 10))
-        ttk.Radiobutton(af, text="音訊 - MP3",
-                        variable=self.download_type, value="mp3").pack(side=tk.LEFT)
         ttk.Radiobutton(af, text="音訊 - M4A",
-                        variable=self.download_type, value="m4a").pack(side=tk.LEFT, padx=(12, 0))
+                        variable=self.download_type, value="m4a").pack(side=tk.LEFT)
 
         bot = ttk.Frame(inp)
         bot.pack(fill=tk.X, pady=(0, 12))
@@ -455,9 +466,8 @@ class DownloaderGUI:
         self.path_entry = ttk.Entry(bot, font=(FONT, 9))
         self.path_entry.insert(0, os.getcwd())
         self.path_entry.pack(side=tk.LEFT, padx=(8, 6), fill=tk.X, expand=True)
-        ttk.Button(bot, text="瀏覽", command=self.browse_path).pack(side=tk.LEFT)
-        ttk.Button(bot, text="加入下載", style='Accent.TButton',
-                   command=self.add_download).pack(side=tk.RIGHT)
+        _make_btn(bot, "瀏覽", 'blue', self.browse_path).pack(side=tk.LEFT)
+        _make_btn(bot, "加入下載", 'blue', self.add_download).pack(side=tk.RIGHT, padx=(12, 0))
 
         # ── 分隔線 ──
         ttk.Separator(root, orient='horizontal').pack(fill=tk.X, padx=12, pady=(0, 4))
