@@ -59,10 +59,10 @@ class RoundedButton(tk.Canvas):
         self._enabled = True
 
         _font = tkFont.Font(family=FONT, size=9)
-        self._w = _font.measure(text) + 28
+        self._btn_w = _font.measure(text) + 28
 
         bg = _get_bg(parent)
-        super().__init__(parent, width=self._w, height=height,
+        super().__init__(parent, width=self._btn_w, height=height,
                          bg=bg, highlightthickness=0, cursor='hand2')
 
         self._draw(self._c_normal)
@@ -72,7 +72,7 @@ class RoundedButton(tk.Canvas):
 
     def _draw(self, fill):
         self.delete('all')
-        r, w, h = self._radius, self._w, self._h
+        r, w, h = self._radius, self._btn_w, self._h
         self.create_arc(0,     0,     2*r,   2*r,   start=90,  extent=90, fill=fill, outline=fill)
         self.create_arc(w-2*r, 0,     w,     2*r,   start=0,   extent=90, fill=fill, outline=fill)
         self.create_arc(0,     h-2*r, 2*r,   h,     start=180, extent=90, fill=fill, outline=fill)
@@ -91,8 +91,8 @@ class RoundedButton(tk.Canvas):
         if text is not None:
             self._text = text
             _font = tkFont.Font(family=FONT, size=9)
-            self._w = _font.measure(text) + 28
-            super().config(width=self._w)
+            self._btn_w = _font.measure(text) + 28
+            super().config(width=self._btn_w)
             self._draw(self._c_normal if self._enabled else '#aaaaaa')
         if kw:
             super().config(**kw)
@@ -491,7 +491,7 @@ class DownloadItem:
 class DownloaderGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("YouTube 下載器")
+        self.root.title("YouTube 下載器 v26.6.1")
 
         window_width, window_height = 660, 560
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
