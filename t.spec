@@ -1,22 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
-
-sv_ttk_datas, sv_ttk_binaries, sv_ttk_hidden = collect_all('sv_ttk')
 
 a = Analysis(
     ['dl.py'],
     pathex=[],
-    binaries=[*sv_ttk_binaries],
+    binaries=[],
     datas=[
         ('yt-dlp.exe', '.'),
         ('ffmpeg.exe', '.'),
         ('ffprobe.exe', '.'),
         ('icon.ico', '.'),
-        *sv_ttk_datas,
+        *collect_data_files('sv_ttk'),
     ],
-    hiddenimports=[*sv_ttk_hidden],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -7,6 +7,7 @@ import queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import tkinter.ttk as ttk
+import tkinter.font as tkFont
 import sv_ttk
 
 CARD_BG = '#ffffff'
@@ -28,23 +29,75 @@ TYPE_LABELS = {
     'm4a':        '音訊 - M4A',
 }
 
-_BTN_COLORS = {
-    'blue':   ('#0078d4', '#005a9e', 'white'),
-    'red':    ('#c42b1c', '#a02216', 'white'),
-    'orange': ('#c55a00', '#a04800', 'white'),
-    'green':  ('#107c10', '#0a5e0a', 'white'),
-}
+def _get_bg(widget):
+    if isinstance(widget, ttk.Widget):
+        return ttk.Style().lookup('TFrame', 'background') or '#f3f3f3'
+    for key in ('bg', 'background'):
+        try:
+            val = str(widget.cget(key)).strip()
+            if val:
+                return val
+        except tk.TclError:
+            pass
+    return ttk.Style().lookup('TFrame', 'background') or '#f3f3f3'
 
-def _make_btn(parent, text, color, command, font_size=9, **kw):
-    bg, abg, fg = _BTN_COLORS[color]
-    return tk.Button(
-        parent, text=text, bg=bg, fg=fg,
-        activebackground=abg, activeforeground=fg,
-        command=command,
-        relief=tk.FLAT, bd=0, cursor='hand2',
-        font=(FONT, font_size),
-        **kw
-    )
+
+class RoundedButton(tk.Canvas):
+    _COLORS = {
+        'blue':   ('#0078d4', '#005a9e'),
+        'red':    ('#c42b1c', '#a02216'),
+        'orange': ('#c55a00', '#a04800'),
+        'green':  ('#107c10', '#0a5e0a'),
+    }
+
+    def __init__(self, parent, text, color, command, height=28, radius=8):
+        self._c_normal, self._c_hover = self._COLORS[color]
+        self._cmd     = command
+        self._text    = text
+        self._radius  = radius
+        self._h       = height
+        self._enabled = True
+
+        _font = tkFont.Font(family=FONT, size=9)
+        self._w = _font.measure(text) + 28
+
+        bg = _get_bg(parent)
+        super().__init__(parent, width=self._w, height=height,
+                         bg=bg, highlightthickness=0, cursor='hand2')
+
+        self._draw(self._c_normal)
+        self.bind('<Enter>', lambda e: self._draw(self._c_hover) if self._enabled else None)
+        self.bind('<Leave>', lambda e: self._draw(self._c_normal) if self._enabled else None)
+        self.bind('<Button-1>', lambda e: self._cmd() if self._enabled else None)
+
+    def _draw(self, fill):
+        self.delete('all')
+        r, w, h = self._radius, self._w, self._h
+        self.create_arc(0,     0,     2*r,   2*r,   start=90,  extent=90, fill=fill, outline=fill)
+        self.create_arc(w-2*r, 0,     w,     2*r,   start=0,   extent=90, fill=fill, outline=fill)
+        self.create_arc(0,     h-2*r, 2*r,   h,     start=180, extent=90, fill=fill, outline=fill)
+        self.create_arc(w-2*r, h-2*r, w,     h,     start=270, extent=90, fill=fill, outline=fill)
+        self.create_rectangle(r, 0,   w-r, h,   fill=fill, outline=fill)
+        self.create_rectangle(0, r,   w,   h-r, fill=fill, outline=fill)
+        self.create_text(w//2, h//2, text=self._text, fill='white', font=(FONT, 9))
+
+    def config(self, **kw):
+        state = kw.pop('state', None)
+        text  = kw.pop('text', None)
+        if state is not None:
+            self._enabled = (state != tk.DISABLED)
+            super().config(cursor='' if not self._enabled else 'hand2')
+            self._draw(self._c_normal if self._enabled else '#aaaaaa')
+        if text is not None:
+            self._text = text
+            _font = tkFont.Font(family=FONT, size=9)
+            self._w = _font.measure(text) + 28
+            super().config(width=self._w)
+            self._draw(self._c_normal if self._enabled else '#aaaaaa')
+        if kw:
+            super().config(**kw)
+
+    configure = config
 
 
 def resource_path(relative_path):
@@ -267,17 +320,30 @@ class DownloadItem:
         )
         self._status_label.pack(pady=(3, 0))
 
-        self._stop_btn = _make_btn(right, '中止', 'red', self._stop_download)
+        self._stop_btn = RoundedButton(right, '中止', 'red', self._stop_download)
         self._stop_btn.pack(pady=(5, 0))
 
-        self._error_btn = _make_btn(right, '查看錯誤', 'orange', self._show_error)
+        self._error_btn = RoundedButton(right, '查看錯誤', 'orange', self._show_error)
 
-        _make_btn(right, '複製 URL', 'blue', self._copy_url).pack(pady=(5, 0))
+        # ── 右上角：複製 + 刪除 ──
+        corner = tk.Frame(self.frame, bg=CARD_BG)
+        corner.grid(row=0, column=2, sticky='ne', padx=(0, 6), pady=(4, 0))
 
-        # ── 刪除鈕 ──
-        _make_btn(
-            self.frame, '✕', 'red', self._delete, font_size=10
-        ).grid(row=0, column=2, sticky='ne', padx=(0, 6), pady=(6, 0))
+        tk.Button(
+            corner, text='⧉',
+            bg=CARD_BG, fg='#aaaaaa',
+            activebackground=CARD_BG, activeforeground='#555555',
+            font=(FONT, 12), relief=tk.FLAT, bd=0, cursor='hand2',
+            command=self._copy_url
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            corner, text='✕',
+            bg=CARD_BG, fg='#bbbbbb',
+            activebackground=CARD_BG, activeforeground='#555555',
+            font=(FONT, 10), relief=tk.FLAT, bd=0, cursor='hand2',
+            command=self._delete
+        ).pack(side=tk.LEFT)
 
         self.frame.columnconfigure(0, weight=1)
 
@@ -404,7 +470,7 @@ class DownloadItem:
         text.insert('1.0', self._error_text)
         text.config(state=tk.DISABLED)
 
-        _make_btn(win, '關閉', 'blue', win.destroy).pack(pady=(0, 10))
+        RoundedButton(win, '關閉', 'blue', win.destroy).pack(pady=(0, 10))
 
     def _stop_download(self):
         self._stop_event.set()
@@ -466,8 +532,8 @@ class DownloaderGUI:
         self.path_entry = ttk.Entry(bot, font=(FONT, 9))
         self.path_entry.insert(0, os.getcwd())
         self.path_entry.pack(side=tk.LEFT, padx=(8, 6), fill=tk.X, expand=True)
-        _make_btn(bot, "瀏覽", 'blue', self.browse_path).pack(side=tk.LEFT)
-        _make_btn(bot, "加入下載", 'blue', self.add_download).pack(side=tk.RIGHT, padx=(12, 0))
+        RoundedButton(bot, "瀏覽", 'blue', self.browse_path).pack(side=tk.LEFT)
+        RoundedButton(bot, "加入下載", 'blue', self.add_download).pack(side=tk.RIGHT, padx=(12, 0))
 
         # ── 分隔線 ──
         ttk.Separator(root, orient='horizontal').pack(fill=tk.X, padx=12, pady=(0, 4))
