@@ -121,7 +121,7 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
         q.put(('phase', 'meta'))
         check_proc = subprocess.Popen(
             [yt_dlp_path, '--skip-download', '--no-playlist',
-             '--print', '%(chapters)j\t%(upload_date)s - [%(uploader)s][%(id)s] %(title)s',
+             '--print', '%(chapters)j\t%(upload_date)s - [%(uploader)s][%(id)s]\t%(title)s',
              url],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, cwd=output_path
@@ -136,14 +136,14 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
         actual_cwd = output_path
         title_sent = False
         first_line = check_out.strip().split('\n')[0] if check_out.strip() else ''
-        if check_proc.returncode == 0 and '\t' in first_line:
-            chapters_json, raw_folder = first_line.split('\t', 1)
+        if check_proc.returncode == 0 and first_line.count('\t') >= 2:
+            chapters_json, folder_base, video_title = first_line.split('\t', 2)
             if chapters_json.strip() not in ('', '[]', 'null', 'None'):
-                folder = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', raw_folder).strip('. ')
+                folder = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', folder_base).strip('. ')
                 if folder:
                     actual_cwd = os.path.join(output_path, folder)
                     os.makedirs(actual_cwd, exist_ok=True)
-                    q.put(('title', raw_folder))
+                    q.put(('title', video_title))
                     title_sent = True
 
         command = [
