@@ -118,13 +118,41 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
         yt_dlp_path = resource_path("yt-dlp.exe")
         ffmpeg_path = resource_path("")
 
+        q.put(('phase', 'meta'))
+        check_proc = subprocess.Popen(
+            [yt_dlp_path, '--skip-download', '--no-playlist',
+             '--print', '%(chapters)j\t%(upload_date)s - [%(uploader)s][%(id)s] %(title)s',
+             url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, cwd=output_path
+        )
+        proc_ref[0] = check_proc
+        check_out, _ = check_proc.communicate()
+
+        if stop_event.is_set():
+            q.put(('done_stop',))
+            return
+
+        actual_cwd = output_path
+        title_sent = False
+        first_line = check_out.strip().split('\n')[0] if check_out.strip() else ''
+        if check_proc.returncode == 0 and '\t' in first_line:
+            chapters_json, raw_folder = first_line.split('\t', 1)
+            if chapters_json.strip() not in ('', '[]', 'null', 'None'):
+                folder = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', raw_folder).strip('. ')
+                if folder:
+                    actual_cwd = os.path.join(output_path, folder)
+                    os.makedirs(actual_cwd, exist_ok=True)
+                    q.put(('title', raw_folder))
+                    title_sent = True
+
         command = [
             yt_dlp_path,
             '--ffmpeg-location', ffmpeg_path,
             '--newline',
             '--split-chapters',
             '-o', '%(upload_date)s - [%(uploader)s][%(id)s] %(title)s.%(ext)s',
-            '-o', 'chapter:%(upload_date)s - [%(uploader)s][%(id)s] %(title)s/%(upload_date)s - [%(uploader)s][%(id)s] %(section_title)s.%(ext)s',
+            '-o', 'chapter:%(upload_date)s - [%(uploader)s][%(id)s] %(section_title)s.%(ext)s',
             url
         ]
 
@@ -142,7 +170,6 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
         is_playlist    = False
         current_video  = 0
         total_videos   = 0
-        title_sent     = False
         stderr_lines   = []
         error_segments = []
 
@@ -152,7 +179,7 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
             stderr=subprocess.STDOUT,
             bufsize=1,
             text=True,
-            cwd=output_path
+            cwd=actual_cwd
         )
         proc_ref[0] = proc
         if stop_event.is_set():
@@ -387,7 +414,7 @@ class DownloadItem:
                 elif kind == 'phase':
                     self._current_phase = msg[1]
                     self._current_pct   = 0.0
-                    if msg[1] in ('merge', 'convert', 'split'):
+                    if msg[1] in ('merge', 'convert', 'split', 'meta'):
                         self._bar.config(mode='indeterminate')
                         self._bar.start(10)
                     else:
@@ -444,6 +471,7 @@ class DownloadItem:
     def _update_status(self):
         prefix = f'影片 {self._pl_current}/{self._pl_total} · ' if self._pl_total > 0 else ''
         phase_text = {
+            'meta':    '取得資訊中...',
             'video':   f'影像串流 {self._current_pct:.0f}%',
             'audio':   f'音訊串流 {self._current_pct:.0f}%',
             'merge':   '合併中...',
