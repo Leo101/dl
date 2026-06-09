@@ -124,7 +124,7 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
             '--newline',
             '--split-chapters',
             '-o', '%(upload_date)s - [%(uploader)s][%(id)s] %(title)s.%(ext)s',
-            '-o', 'chapter:%(upload_date)s - [%(uploader)s][%(id)s] %(section_title)s.%(ext)s',
+            '-o', 'chapter:%(upload_date)s - [%(uploader)s][%(id)s] %(title)s/%(upload_date)s - [%(uploader)s][%(id)s] %(section_title)s.%(ext)s',
             url
         ]
 
