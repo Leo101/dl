@@ -499,7 +499,7 @@ class DownloadItem:
 class DownloaderGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("YouTube 下載器 v26.6.1")
+        self.root.title("YouTube 下載器 v26.6.2")
 
         window_width, window_height = 660, 560
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
