@@ -2,6 +2,7 @@ import sys
 import subprocess
 import os
 import re
+import json
 import threading
 import queue
 import tkinter as tk
@@ -138,7 +139,12 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
         first_line = check_out.strip().split('\n')[0] if check_out.strip() else ''
         if check_proc.returncode == 0 and first_line.count('\t') >= 2:
             chapters_json, folder_base, video_title = first_line.split('\t', 2)
-            if chapters_json.strip() not in ('', '[]', 'null', 'None'):
+            try:
+                chapters_list = json.loads(chapters_json)
+                has_chapters = isinstance(chapters_list, list) and len(chapters_list) >= 2
+            except (json.JSONDecodeError, TypeError, ValueError):
+                has_chapters = False
+            if has_chapters:
                 folder = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', folder_base).strip('. ')
                 if folder:
                     actual_cwd = os.path.join(output_path, folder)
@@ -529,7 +535,7 @@ class DownloaderGUI:
         self.root = root
         self.root.title("YouTube 下載器 v26.6.2")
 
-        window_width, window_height = 660, 560
+        window_width, window_height = 660, 600
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         self.root.geometry(
             f'{window_width}x{window_height}'
@@ -543,8 +549,14 @@ class DownloaderGUI:
         inp = ttk.Frame(root)
         inp.pack(fill=tk.X, padx=16, pady=(16, 0))
 
-        ttk.Label(inp, text="YouTube 網址").pack(anchor='w')
-        self.url_entry = ttk.Entry(inp, font=(FONT, 10))
+        ttk.Label(inp, text="YouTube 網址（每行一個）").pack(anchor='w')
+        self.url_entry = tk.Text(inp, font=(FONT, 10), height=3,
+                                 wrap=tk.NONE,
+                                 bg='#ffffff', fg='#000000',
+                                 relief=tk.FLAT, bd=0,
+                                 highlightbackground='#e0e0e0',
+                                 highlightthickness=1,
+                                 insertbackground='black')
         self.url_entry.pack(fill=tk.X, pady=(3, 10))
 
         ttk.Label(inp, text="輸出格式").pack(anchor='w')
@@ -596,8 +608,21 @@ class DownloaderGUI:
             scrollregion=(0, 0, e.width, e.height)))
         self._canvas.bind('<Configure>', lambda e: self._canvas.itemconfig(
             self._cwin, width=e.width))
-        self._canvas.bind_all('<MouseWheel>', lambda e: self._canvas.yview_scroll(
-            int(-1 * (e.delta / 120)), 'units'))
+        self._canvas.bind_all('<MouseWheel>', self._on_mousewheel)
+
+    def _on_mousewheel(self, event):
+        w = event.widget
+        while w is not None:
+            if w is self._canvas or w is self._inner:
+                self._canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+                return
+            parent_name = w.winfo_parent()
+            if not parent_name:
+                break
+            try:
+                w = w.nametowidget(parent_name)
+            except Exception:
+                break
 
     def browse_path(self):
         path = filedialog.askdirectory()
@@ -606,16 +631,18 @@ class DownloaderGUI:
             self.path_entry.insert(0, path)
 
     def add_download(self):
-        url   = self.url_entry.get().strip()
+        raw   = self.url_entry.get('1.0', tk.END)
+        urls  = [u.strip() for u in raw.splitlines() if u.strip()]
         path  = self.path_entry.get().strip()
         dtype = self.download_type.get()
 
-        if not url:
+        if not urls:
             messagebox.showwarning("警告", "請輸入 YouTube 網址")
             return
 
-        DownloadItem(self._inner, url, dtype, path)
-        self.url_entry.delete(0, tk.END)
+        for url in urls:
+            DownloadItem(self._inner, url, dtype, path)
+        self.url_entry.delete('1.0', tk.END)
 
 
 def main():
