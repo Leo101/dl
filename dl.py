@@ -122,7 +122,9 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
             yt_dlp_path,
             '--ffmpeg-location', ffmpeg_path,
             '--newline',
+            '--split-chapters',
             '-o', '%(upload_date)s - [%(uploader)s][%(id)s] %(title)s.%(ext)s',
+            '-o', 'chapter:%(upload_date)s - [%(uploader)s][%(id)s] %(section_title)s.%(ext)s',
             url
         ]
 
@@ -206,6 +208,11 @@ def run_download(url, output_path, download_type, q, proc_ref, stop_event):
                     if dest_count == 1:
                         phase = 'audio'
                         q.put(('phase', 'audio'))
+                continue
+
+            if '[SplitChapters]' in line:
+                phase = 'split'
+                q.put(('phase', 'split'))
                 continue
 
             if '[Merger]' in line:
@@ -380,7 +387,7 @@ class DownloadItem:
                 elif kind == 'phase':
                     self._current_phase = msg[1]
                     self._current_pct   = 0.0
-                    if msg[1] in ('merge', 'convert'):
+                    if msg[1] in ('merge', 'convert', 'split'):
                         self._bar.config(mode='indeterminate')
                         self._bar.start(10)
                     else:
@@ -441,6 +448,7 @@ class DownloadItem:
             'audio':   f'音訊串流 {self._current_pct:.0f}%',
             'merge':   '合併中...',
             'convert': '轉換中...',
+            'split':   '切割章節中...',
         }.get(self._current_phase, '')
         self._status_label.config(text=f'{prefix}{phase_text}', fg='#555555')
 
