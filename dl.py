@@ -11,9 +11,11 @@ import tkinter.ttk as ttk
 import tkinter.font as tkFont
 import sv_ttk
 
-CARD_BG = '#ffffff'
-BORDER  = '#e0e0e0'
-FONT    = 'Segoe UI'
+CARD_BG    = '#ffffff'
+BORDER     = '#d0d0d0'
+FONT       = 'Segoe UI'
+FONT_ZH    = 'Microsoft JhengHei'
+CARD_INSET = 2   # frame inset inside card canvas for rounded-corner effect
 
 BADGE_CFG = {
     'video_best': ('#dce8fb', '#1a5fc8'),
@@ -43,6 +45,72 @@ def _get_bg(widget):
     return ttk.Style().lookup('TFrame', 'background') or '#f3f3f3'
 
 
+def _draw_rounded_rect(canvas, w, h, r, fill, border, tag):
+    canvas.delete(tag)
+    if w < 2*r or h < 2*r or w <= 1 or h <= 1:
+        return
+    pts = [
+        r, 0,     w-r, 0,
+        w, 0,     w, r,
+        w, h-r,   w, h,
+        w-r, h,   r, h,
+        0, h,     0, h-r,
+        0, r,     0, 0,
+    ]
+    canvas.create_polygon(pts, smooth=True, fill=fill, outline=border, tags=tag)
+    canvas.tag_lower(tag)
+
+
+class SegmentedControl(tk.Frame):
+    """Flat segmented selector."""
+
+    OPTS = [
+        ('video_best', '影片 ‧ 最高畫質 MP4'),
+        ('video_h264', '影片 ‧ 相容 H.264'),
+        ('m4a',        '音訊 ‧ M4A'),
+    ]
+
+    SEL_BG   = '#0078d4'
+    SEL_FG   = '#ffffff'
+    UNSEL_BG = '#ffffff'
+    UNSEL_FG = '#444444'
+    BORDER_C = '#c6c6c6'
+
+    def __init__(self, parent, variable, **kw):
+        super().__init__(parent, bg=self.BORDER_C, bd=0, **kw)
+        self._var    = variable
+        self._labels = {}
+        self._build()
+        variable.trace_add('write', lambda *_: self._refresh())
+        self._refresh()
+
+    def _build(self):
+        for i, (val, label) in enumerate(self.OPTS):
+            if i > 0:
+                tk.Frame(self, width=1, bg=self.BORDER_C).pack(side=tk.LEFT, fill=tk.Y)
+            lbl = tk.Label(
+                self, text=label,
+                font=(FONT_ZH, 10),
+                padx=14, pady=6,
+                cursor='hand2',
+                relief=tk.FLAT, bd=0,
+            )
+            lbl.pack(side=tk.LEFT)
+            lbl.bind('<Button-1>', lambda e, v=val: self._select(v))
+            self._labels[val] = lbl
+
+    def _select(self, val):
+        self._var.set(val)
+
+    def _refresh(self):
+        cur = self._var.get()
+        for val, lbl in self._labels.items():
+            if val == cur:
+                lbl.config(bg=self.SEL_BG, fg=self.SEL_FG)
+            else:
+                lbl.config(bg=self.UNSEL_BG, fg=self.UNSEL_FG)
+
+
 class RoundedButton(tk.Canvas):
     _COLORS = {
         'blue':   ('#0078d4', '#005a9e'),
@@ -51,16 +119,18 @@ class RoundedButton(tk.Canvas):
         'green':  ('#107c10', '#0a5e0a'),
     }
 
-    def __init__(self, parent, text, color, command, height=28, radius=8):
+    def __init__(self, parent, text, color, command, height=30, radius=6,
+                 font_family=None):
         self._c_normal, self._c_hover = self._COLORS[color]
-        self._cmd     = command
-        self._text    = text
-        self._radius  = radius
-        self._h       = height
-        self._enabled = True
+        self._cmd        = command
+        self._text       = text
+        self._radius     = radius
+        self._h          = height
+        self._enabled    = True
+        self._font_fam   = font_family or FONT
 
-        _font = tkFont.Font(family=FONT, size=9)
-        self._btn_w = _font.measure(text) + 28
+        _font = tkFont.Font(family=self._font_fam, size=10)
+        self._btn_w = _font.measure(text) + 32
 
         bg = _get_bg(parent)
         super().__init__(parent, width=self._btn_w, height=height,
@@ -80,7 +150,8 @@ class RoundedButton(tk.Canvas):
         self.create_arc(w-2*r, h-2*r, w,     h,     start=270, extent=90, fill=fill, outline=fill)
         self.create_rectangle(r, 0,   w-r, h,   fill=fill, outline=fill)
         self.create_rectangle(0, r,   w,   h-r, fill=fill, outline=fill)
-        self.create_text(w//2, h//2, text=self._text, fill='white', font=(FONT, 9))
+        self.create_text(w//2, h//2, text=self._text, fill='white',
+                         font=(self._font_fam, 10))
 
     def config(self, **kw):
         state = kw.pop('state', None)
@@ -91,8 +162,8 @@ class RoundedButton(tk.Canvas):
             self._draw(self._c_normal if self._enabled else '#aaaaaa')
         if text is not None:
             self._text = text
-            _font = tkFont.Font(family=FONT, size=9)
-            self._btn_w = _font.measure(text) + 28
+            _font = tkFont.Font(family=self._font_fam, size=10)
+            self._btn_w = _font.measure(text) + 32
             super().config(width=self._btn_w)
             self._draw(self._c_normal if self._enabled else '#aaaaaa')
         if kw:
@@ -302,13 +373,23 @@ class DownloadItem:
         self._start()
 
     def _build_ui(self, parent):
-        self.frame = tk.Frame(
+        # Canvas wrapper: frame sits at (CARD_INSET, CARD_INSET) so canvas corners
+        # are visible outside the white frame, creating the rounded-corner illusion.
+        self._card_canvas = tk.Canvas(
             parent,
-            bg=CARD_BG,
-            highlightbackground=BORDER,
-            highlightthickness=1
+            highlightthickness=0,
+            bg=_get_bg(parent),
         )
-        self.frame.pack(fill=tk.X, padx=6, pady=3)
+        self._card_canvas.pack(fill=tk.X, padx=6, pady=3)
+
+        self.frame = tk.Frame(self._card_canvas, bg=CARD_BG)
+
+        self._card_win = self._card_canvas.create_window(
+            CARD_INSET, CARD_INSET, window=self.frame, anchor='nw'
+        )
+
+        self._card_canvas.bind('<Configure>', self._on_card_resize)
+        self.frame.bind('<Configure>', self._on_frame_resize)
 
         # ── 左側：徽章 + 標題 + URL ──
         left = tk.Frame(self.frame, bg=CARD_BG)
@@ -322,7 +403,7 @@ class DownloadItem:
             top_row,
             text=TYPE_LABELS.get(self._download_type, ''),
             bg=bbg, fg=bfg,
-            font=(FONT, 8),
+            font=(FONT_ZH, 9),
             padx=6, pady=2,
             relief=tk.FLAT
         ).pack(side=tk.LEFT)
@@ -331,7 +412,7 @@ class DownloadItem:
             top_row,
             text=self._url,
             bg=CARD_BG, fg='#1a1a1a',
-            font=(FONT, 9, 'bold'),
+            font=(FONT_ZH, 10, 'bold'),
             anchor='w'
         )
         self._title_label.pack(side=tk.LEFT, padx=(8, 0))
@@ -340,11 +421,11 @@ class DownloadItem:
             left,
             text=self._url,
             bg=CARD_BG, fg='#888888',
-            font=(FONT, 8),
+            font=(FONT, 9),
             anchor='w'
         ).pack(anchor='w', pady=(3, 0))
 
-        # ── 右側：進度條 + 狀態 + 按鈕 ──
+        # ── 右側：進度條 + 狀態 ──
         right = tk.Frame(self.frame, bg=CARD_BG)
         right.grid(row=0, column=1, sticky='ns', padx=(0, 10), pady=8)
 
@@ -355,17 +436,15 @@ class DownloadItem:
             right,
             text='準備中',
             bg=CARD_BG, fg='#888888',
-            font=(FONT, 8),
+            font=(FONT_ZH, 9),
             width=22
         )
         self._status_label.pack(pady=(3, 0))
 
-        self._stop_btn = RoundedButton(right, '中止', 'red', self._stop_download)
-        self._stop_btn.pack(pady=(5, 0))
+        self._error_btn = RoundedButton(right, '查看錯誤', 'orange', self._show_error,
+                                        font_family=FONT_ZH)
 
-        self._error_btn = RoundedButton(right, '查看錯誤', 'orange', self._show_error)
-
-        # ── 右上角：複製 + 刪除 ──
+        # ── 右上角：複製 + 中止 + 刪除 ──
         corner = tk.Frame(self.frame, bg=CARD_BG)
         corner.grid(row=0, column=2, sticky='ne', padx=(0, 6), pady=(4, 0))
 
@@ -373,19 +452,41 @@ class DownloadItem:
             corner, text='⧉',
             bg=CARD_BG, fg='#aaaaaa',
             activebackground=CARD_BG, activeforeground='#555555',
-            font=(FONT, 12), relief=tk.FLAT, bd=0, cursor='hand2',
+            font=(FONT, 14), relief=tk.FLAT, bd=0, cursor='hand2',
             command=self._copy_url
         ).pack(side=tk.LEFT)
+
+        # Red during active download so user knows it's stoppable
+        self._stop_btn = tk.Button(
+            corner, text='⏹',
+            bg=CARD_BG, fg='#c42b1c',
+            activebackground=CARD_BG, activeforeground='#a02216',
+            font=(FONT, 13), relief=tk.FLAT, bd=0, cursor='hand2',
+            command=self._stop_download
+        )
+        self._stop_btn.pack(side=tk.LEFT)
 
         tk.Button(
             corner, text='✕',
             bg=CARD_BG, fg='#bbbbbb',
             activebackground=CARD_BG, activeforeground='#555555',
-            font=(FONT, 10), relief=tk.FLAT, bd=0, cursor='hand2',
+            font=(FONT, 12), relief=tk.FLAT, bd=0, cursor='hand2',
             command=self._delete
         ).pack(side=tk.LEFT)
 
         self.frame.columnconfigure(0, weight=1)
+
+    def _on_frame_resize(self, event):
+        new_h = event.height + CARD_INSET * 2
+        self._card_canvas.config(height=new_h)
+        cw = self._card_canvas.winfo_width()
+        _draw_rounded_rect(self._card_canvas, cw, new_h, 6, CARD_BG, BORDER, 'bg')
+
+    def _on_card_resize(self, event):
+        fw = max(1, event.width - CARD_INSET * 2)
+        self._card_canvas.itemconfig(self._card_win, width=fw)
+        ch = self._card_canvas.winfo_height()
+        _draw_rounded_rect(self._card_canvas, event.width, ch, 6, CARD_BG, BORDER, 'bg')
 
     def _start(self):
         threading.Thread(
@@ -498,7 +599,7 @@ class DownloadItem:
         text = tk.Text(
             frame,
             wrap=tk.WORD,
-            font=('Consolas', 9),
+            font=('Consolas', 10),
             bg=CARD_BG, fg='#1a1a1a',
             relief=tk.FLAT, bd=0,
             highlightbackground=BORDER,
@@ -512,7 +613,8 @@ class DownloadItem:
         text.insert('1.0', self._error_text)
         text.config(state=tk.DISABLED)
 
-        RoundedButton(win, '關閉', 'blue', win.destroy).pack(pady=(0, 10))
+        RoundedButton(win, '關閉', 'blue', win.destroy,
+                      font_family=FONT_ZH).pack(pady=(0, 10))
 
     def _stop_download(self):
         self._stop_event.set()
@@ -525,7 +627,7 @@ class DownloadItem:
                 )
             except Exception:
                 proc.terminate()
-        self._stop_btn.config(state=tk.DISABLED, text='中止中...')
+        self._stop_btn.config(state=tk.DISABLED, fg='#cccccc', cursor='')
 
     def _copy_url(self):
         self.frame.clipboard_clear()
@@ -533,67 +635,88 @@ class DownloadItem:
 
     def _delete(self):
         self._destroyed = True
-        self.frame.destroy()
+        self._card_canvas.destroy()
 
 
 class DownloaderGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("YouTube 下載器 v26.6.2")
+        self.root.title("影音下載器 v26.6.3")
 
-        window_width, window_height = 660, 600
+        window_width, window_height = 660, 620
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         self.root.geometry(
             f'{window_width}x{window_height}'
             f'+{int(sw/2 - window_width/2)}+{int(sh/2 - window_height/2)}'
         )
 
-        # 取得 sv_ttk 套用後的實際背景色，用於 canvas 等非 ttk 元件
         theme_bg = ttk.Style().lookup('TFrame', 'background') or '#f9f9f9'
+        self._theme_bg = theme_bg
 
         # ── 輸入區 ──
         inp = ttk.Frame(root)
         inp.pack(fill=tk.X, padx=16, pady=(16, 0))
 
-        ttk.Label(inp, text="YouTube 網址（每行一個）").pack(anchor='w')
-        self.url_entry = tk.Text(inp, font=(FONT, 10), height=3,
-                                 wrap=tk.NONE,
-                                 bg='#ffffff', fg='#000000',
-                                 relief=tk.FLAT, bd=0,
-                                 highlightbackground='#e0e0e0',
-                                 highlightthickness=1,
-                                 insertbackground='black')
-        self.url_entry.pack(fill=tk.X, pady=(3, 10))
+        ttk.Label(inp, text="下載網址", font=(FONT_ZH, 10)).pack(anchor='w')
 
-        ttk.Label(inp, text="輸出格式").pack(anchor='w')
+        url_row = ttk.Frame(inp)
+        url_row.pack(fill=tk.X, pady=(3, 10))
+
+        self.url_entry = ttk.Entry(url_row, font=(FONT, 11))
+        self.url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        btn_import = tk.Button(
+            url_row, text='📋',
+            font=('Segoe UI Emoji', 16),
+            bg=theme_bg, fg='#555555',
+            activebackground=theme_bg, activeforeground='#000000',
+            relief=tk.FLAT, bd=0, cursor='hand2',
+            command=self.import_urls
+        )
+        btn_import.pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Label(inp, text="輸出格式", font=(FONT_ZH, 10)).pack(anchor='w')
         self.download_type = tk.StringVar(value="video_best")
 
-        vf = ttk.Frame(inp)
-        vf.pack(anchor='w', pady=(3, 2))
-        ttk.Radiobutton(vf, text="影片 - 最高畫質 MP4（含 VP9/AV1）",
-                        variable=self.download_type, value="video_best").pack(side=tk.LEFT)
-        ttk.Radiobutton(vf, text="影片 - 相容模式 MP4（H.264）",
-                        variable=self.download_type, value="video_h264").pack(side=tk.LEFT, padx=(12, 0))
-
-        af = ttk.Frame(inp)
-        af.pack(anchor='w', pady=(0, 10))
-        ttk.Radiobutton(af, text="音訊 - M4A",
-                        variable=self.download_type, value="m4a").pack(side=tk.LEFT)
+        seg = SegmentedControl(inp, self.download_type)
+        seg.pack(anchor='w', pady=(4, 10))
 
         bot = ttk.Frame(inp)
         bot.pack(fill=tk.X, pady=(0, 12))
-        ttk.Label(bot, text="下載位置").pack(side=tk.LEFT)
-        self.path_entry = ttk.Entry(bot, font=(FONT, 9))
+
+        ttk.Label(bot, text="下載位置", font=(FONT_ZH, 10)).pack(side=tk.LEFT)
+
+        self.path_entry = ttk.Entry(bot, font=(FONT, 10))
         self.path_entry.insert(0, os.getcwd())
-        self.path_entry.pack(side=tk.LEFT, padx=(8, 6), fill=tk.X, expand=True)
-        RoundedButton(bot, "瀏覽", 'blue', self.browse_path).pack(side=tk.LEFT)
-        RoundedButton(bot, "加入下載", 'blue', self.add_download).pack(side=tk.RIGHT, padx=(12, 0))
+        self.path_entry.pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
+
+        # 瀏覽按鈕：平面 emoji 圖示，與角落按鈕同樣 flat 風格
+        btn_browse = tk.Button(
+            bot, text='📂',
+            font=('Segoe UI Emoji', 16),
+            bg=theme_bg, fg='#555555',
+            activebackground=theme_bg, activeforeground='#000000',
+            relief=tk.FLAT, bd=0, cursor='hand2',
+            command=self.browse_path
+        )
+        btn_browse.pack(side=tk.LEFT)
+
+        # 加入下載按鈕：平面 emoji 圖示
+        btn_add = tk.Button(
+            bot, text='📥',
+            font=('Segoe UI Emoji', 16),
+            bg=theme_bg, fg='#555555',
+            activebackground=theme_bg, activeforeground='#000000',
+            relief=tk.FLAT, bd=0, cursor='hand2',
+            command=self.add_download
+        )
+        btn_add.pack(side=tk.RIGHT, padx=(8, 0))
 
         # ── 分隔線 ──
         ttk.Separator(root, orient='horizontal').pack(fill=tk.X, padx=12, pady=(0, 4))
 
         # ── 清單標題 ──
-        ttk.Label(root, text="下載清單", font=(FONT, 9, 'bold')).pack(
+        ttk.Label(root, text="下載清單", font=(FONT_ZH, 10, 'bold')).pack(
             anchor='w', padx=16, pady=(6, 4))
 
         # ── 可捲動清單 ──
@@ -636,19 +759,37 @@ class DownloaderGUI:
             self.path_entry.delete(0, tk.END)
             self.path_entry.insert(0, path)
 
+    def import_urls(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("文字檔", "*.txt"), ("所有檔案", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding='utf-8') as f:
+                urls = [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            messagebox.showerror("錯誤", f"無法讀取檔案：{e}")
+            return
+        if not urls:
+            messagebox.showwarning("警告", "檔案中沒有找到網址")
+            return
+        out_path = self.path_entry.get().strip()
+        dtype    = self.download_type.get()
+        for url in urls:
+            DownloadItem(self._inner, url, dtype, out_path)
+
     def add_download(self):
-        raw   = self.url_entry.get('1.0', tk.END)
-        urls  = [u.strip() for u in raw.splitlines() if u.strip()]
+        url   = self.url_entry.get().strip()
         path  = self.path_entry.get().strip()
         dtype = self.download_type.get()
 
-        if not urls:
-            messagebox.showwarning("警告", "請輸入 YouTube 網址")
+        if not url:
+            messagebox.showwarning("警告", "請輸入下載網址")
             return
 
-        for url in urls:
-            DownloadItem(self._inner, url, dtype, path)
-        self.url_entry.delete('1.0', tk.END)
+        DownloadItem(self._inner, url, dtype, path)
+        self.url_entry.delete(0, tk.END)
 
 
 def main():
