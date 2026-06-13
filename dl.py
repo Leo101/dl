@@ -518,7 +518,13 @@ class DownloadItem:
         self._stop_event.set()
         proc = self._proc_ref[0]
         if proc is not None:
-            proc.terminate()
+            try:
+                subprocess.run(
+                    ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+                    capture_output=True
+                )
+            except Exception:
+                proc.terminate()
         self._stop_btn.config(state=tk.DISABLED, text='中止中...')
 
     def _copy_url(self):
